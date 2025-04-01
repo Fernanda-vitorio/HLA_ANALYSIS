@@ -1,0 +1,513 @@
+#carregar pacotes####
+library(openxlsx)
+library(ggplot2)
+library(janitor)
+library(tidyverse)
+library(midasHLA)
+library(readr)
+
+#arquivo de fenótipo exemplo do manual do desenvolvedor####
+
+dados_fenotipo_covar <- read.xlsx("DOENÇA CELÍACA E MICROBIOMA Atualiz. 15_05_24 Fernanda (1) (1).xlsx", sheet=1, startRow = 3)
+
+dados_fenotipo_covar <- dados_fenotipo_covar %>% clean_names() %>% filter(selecionados_para_estatistica == 1) %>% drop_na(a_1) %>% select(codigo, grupo, sexo_f_1_m_0) %>% dplyr::rename(ID = codigo)
+dados_fenotipo_covar$ID <- gsub(" ", "_", dados_fenotipo_covar$ID)
+
+#converter grupos caso-controle para dados binários
+
+dados_fenotipo_covar <- dados_fenotipo_covar %>% mutate(disease = case_when(grupo == "DCE" ~ 1,
+                                                                            grupo == "MG1" ~ 0))
+
+#dados brutos de genotipagem HLA
+dados_brutos_hla <- read.xlsx("DOENÇA CELÍACA E MICROBIOMA Atualiz. 15_05_24 Fernanda (1) (1).xlsx", sheet=1, startRow = 3)
+dados_brutos_hla <- dados_brutos_hla %>% filter(Selecionados.para.estatística == 1)%>% drop_na(A_1) %>% select(-c(Grupo, `Sexo.(F.=.1,.M.=.0)`, Selecionados.para.estatística, Motivo)) %>% dplyr::rename(ID = "Código")
+
+dados_brutos_hla$ID <- gsub(" ", "_", dados_brutos_hla$ID)
+
+#corrigir "DRB4*01:03:01:" para "DRB4*01:03:01"
+dados_brutos_hla$DRB4_1 <- gsub("DRB4*01:03:01:", "DRB4*01:03:01", dados_brutos_hla$DRB4_1, fixed = TRUE)
+dados_brutos_hla$DRB4_2 <- gsub("DRB4*01:03:01:", "DRB4*01:03:01", dados_brutos_hla$DRB4_2, fixed = TRUE)
+
+#corrigir "DPB1*04:01:01:" para "DPB1*04:01:01"
+
+dados_brutos_hla$DPB1_1 <- gsub("DPB1*04:01:01:", "DRB4*01:03:01", dados_brutos_hla$DPB1_1, fixed = TRUE)
+dados_brutos_hla$DPB1_2 <- gsub("DPB1*04:01:01:", "DPB1*04:01:01", dados_brutos_hla$DPB1_2, fixed = TRUE)
+
+#salvar aruivo bruto da genotipagem
+
+write_tsv(dados_brutos_hla, "dados_brutos_hla.tsv", na = "NA", quote = "none")
+
+#dados HLA genotipagem
+
+dados_hla_midas <- readHlaCalls("dados_brutos_hla.tsv", resolution = 6, na.strings = c("Not typed", "-", "NA", "", " "))
+
+
+##Frequência dos alelos de 5% ou mais em nossa coorte de estudo comparada a outra populações
+freq_HLA <- getHlaFrequencies(hla_calls = dados_hla_midas, compare = TRUE) %>%
+  filter(Freq > 0.01)
+
+write.xlsx(freq_HLA, file = "Frequência alelica_6 digitos.xlsx")
+
+#preparar e criar data.frame para análises
+HLA <- prepareMiDAS(
+  hla_calls = dados_hla_midas,
+  colData = dados_fenotipo_covar,
+  experiment = "hla_alleles"
+)
+
+#Remove alleles with a HWE p-value below 0.05 divided by the number of alleles tested / present in our data
+HLA <- HWETest(
+  object = HLA,
+  experiment = "hla_alleles",
+  HWE_cutoff = 0.05 / 331,
+  as.MiDAS = TRUE
+)
+
+#análises de associação com correção (regressões logísticas multivariadas)####
+
+#definir modelo das regressões logísticas multivariadas####
+HLA_model <- glm(disease ~ term + sexo_f_1_m_0, data = HLA, family = binomial())
+
+#análise modelo dominante
+HLA_results_dominant <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "dominant",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "BH", 
+  exponentiate = TRUE,
+)
+
+kableResults(HLA_results_dominant)
+
+#manipular resultados####
+
+#resultados modelo dominante
+HLA_results_dominant <- HLA_results_dominant %>% clean_names() %>% select(allele,
+                                                                          ntotal,
+                                                                          ntotal_percent,
+                                                                          n_disease_0,
+                                                                          n_disease_0_percent,
+                                                                          n_disease_1,
+                                                                          n_disease_1_percent,
+                                                                          estimate,
+                                                                          conf_low,
+                                                                          conf_high,
+                                                                          p_value,
+                                                                          p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_dominant <- HLA_results_dominant %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+HLA_results_dominant <- HLA_results_dominant %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05)
+
+write.xlsx(HLA_results_dominant, file = "HLA_alleles_results_dominant_4D.xlsx")
+
+#########análise modelo dominante corrigido para covariaveis 
+HLA_results_dominant <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "dominant",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "BH", 
+  exponentiate = TRUE,
+  conditional=TRUE
+)
+kableResults(HLA_results_dominant, scroll_box_height = "200px")
+
+##########manipular resultados####
+
+#resultados modelo dominante
+HLA_results_dominant <- HLA_results_dominant %>% clean_names() %>% select(allele,
+                                                                          covariates,
+                                                                          ntotal,
+                                                                          ntotal_percent,
+                                                                          n_disease_0,
+                                                                          n_disease_0_percent,
+                                                                          n_disease_1,
+                                                                          n_disease_1_percent,
+                                                                          estimate,
+                                                                          conf_low,
+                                                                          conf_high,
+                                                                          p_value,
+                                                                          p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_dominant <- HLA_results_dominant %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+HLA_results_dominant <- HLA_results_dominant %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05)
+
+write.xlsx(HLA_results_dominant, file = "HLA_alleles_results_dominant_4D_covariaveis.xlsx")
+
+#análise modelo aditivo
+HLA_results_additive <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "additive",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "BH", 
+  exponentiate = TRUE,
+)
+
+kableResults(HLA_results_additive)
+
+#resultados modelo aditivo
+HLA_results_additive <- HLA_results_additive %>% clean_names() %>% select(allele,
+                                                                          ntotal,
+                                                                          ntotal_percent,
+                                                                          n_disease_0,
+                                                                          n_disease_0_percent,
+                                                                          n_disease_1,
+                                                                          n_disease_1_percent,
+                                                                          estimate,
+                                                                          conf_low,
+                                                                          conf_high,
+                                                                          p_value,
+                                                                          p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_additive <- HLA_results_additive %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+
+HLA_results_additive <- HLA_results_additive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
+
+write.xlsx(HLA_results_additive, file = "HLA_alleles_results_additive_6D.xlsx")
+
+#análise modelo aditivo corrigido para covariaveis
+HLA_results_additive <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "additive",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "BH", 
+  exponentiate = TRUE,
+  conditional=TRUE
+)
+
+kableResults(HLA_results_additive)
+
+#resultados modelo aditivo
+HLA_results_additive <- HLA_results_additive %>% clean_names() %>% select(allele,
+                                                                          covariates,
+                                                                          ntotal,
+                                                                          ntotal_percent,
+                                                                          n_disease_0,
+                                                                          n_disease_0_percent,
+                                                                          n_disease_1,
+                                                                          n_disease_1_percent,
+                                                                          estimate,
+                                                                          conf_low,
+                                                                          conf_high,
+                                                                          p_value,
+                                                                          p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_additive <- HLA_results_additive %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+
+HLA_results_additive <- HLA_results_additive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
+
+write.xlsx(HLA_results_additive, file = "HLA_4alleles_results_additive_6D_cov.xlsx")
+
+#análise modelo recessivo
+HLA_results_recessive <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "recessive",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "BH", 
+  exponentiate = TRUE,
+)
+
+kableResults(HLA_results_recessive)
+
+#resultados modelo recessivo
+HLA_results_recessive <- HLA_results_recessive %>% clean_names() %>% select(allele,
+                                                                            ntotal,
+                                                                            ntotal_percent,
+                                                                            n_disease_0,
+                                                                            n_disease_0_percent,
+                                                                            n_disease_1,
+                                                                            n_disease_1_percent,
+                                                                            estimate,
+                                                                            conf_low,
+                                                                            conf_high,
+                                                                            p_value,
+                                                                            p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_recessive <- HLA_results_recessive %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+
+HLA_results_recessive <- HLA_results_recessive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
+
+write.xlsx(HLA_results_recessive, file = "HLA_alleles_results_recessive_6D.xlsx")
+
+#análise modelo recessivo corrigido para covariaveis
+HLA_results_recessive <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "recessive",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "BH", 
+  exponentiate = TRUE,
+  conditional=TRUE
+)
+
+kableResults(HLA_results_recessive)
+
+#resultados modelo recessivo
+HLA_results_recessive <- HLA_results_recessive %>% clean_names() %>% select(allele,
+                                                                            covariates,
+                                                                            ntotal,
+                                                                            ntotal_percent,
+                                                                            n_disease_0,
+                                                                            n_disease_0_percent,
+                                                                            n_disease_1,
+                                                                            n_disease_1_percent,
+                                                                            estimate,
+                                                                            conf_low,
+                                                                            conf_high,
+                                                                            p_value,
+                                                                            p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_recessive <- HLA_results_recessive %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+
+HLA_results_recessive <- HLA_results_recessive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
+
+write.xlsx(HLA_results_recessive, file = "HLA_alleles_results_recessive_6D_cov.xlsx")
+
+
+
+
+
+
+###########################
+
+
+
+
+
+
+#########análise modelo dominante corrigido para covariaveis (bonferroni)
+HLA_results_dominant <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "dominant",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "bonferroni", 
+  exponentiate = TRUE,
+  conditional=TRUE
+)
+kableResults(HLA_results_dominant, scroll_box_height = "200px")
+
+#resultados modelo dominante
+HLA_results_dominant <- HLA_results_dominant %>% clean_names() %>% select(allele,
+                                                                          covariates,
+                                                                          ntotal,
+                                                                          ntotal_percent,
+                                                                          n_disease_0,
+                                                                          n_disease_0_percent,
+                                                                          n_disease_1,
+                                                                          n_disease_1_percent,
+                                                                          estimate,
+                                                                          conf_low,
+                                                                          conf_high,
+                                                                          p_value,
+                                                                          p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_dominant <- HLA_results_dominant %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+HLA_results_dominant <- HLA_results_dominant %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05)
+
+write.xlsx(HLA_results_dominant, file = "HLA_alleles_results_dominant_6D_bonferroni.xlsx")
+
+#análise modelo aditivo corrigido para covariaveis (bonferroni)
+HLA_results_additive <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "additive",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "bonferroni", 
+  exponentiate = TRUE,
+  conditional=TRUE
+)
+
+kableResults(HLA_results_additive)
+
+#resultados modelo aditivo
+HLA_results_additive <- HLA_results_additive %>% clean_names() %>% select(allele,
+                                                                          covariates,
+                                                                          ntotal,
+                                                                          ntotal_percent,
+                                                                          n_disease_0,
+                                                                          n_disease_0_percent,
+                                                                          n_disease_1,
+                                                                          n_disease_1_percent,
+                                                                          estimate,
+                                                                          conf_low,
+                                                                          conf_high,
+                                                                          p_value,
+                                                                          p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_additive <- HLA_results_additive %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+
+HLA_results_additive <- HLA_results_additive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
+
+write.xlsx(HLA_results_additive, file = "HLA_4alleles_results_additive_6D_bonferroni.xlsx")
+
+
+#análise modelo recessivo corrigido para covariaveis bonferroni
+HLA_results_recessive <- runMiDAS(
+  object = HLA_model, 
+  experiment = "hla_alleles", 
+  inheritance_model = "recessive",
+  lower_frequency_cutoff = 0.02, 
+  upper_frequency_cutoff = 0.98, 
+  correction = "bonferroni", 
+  exponentiate = TRUE,
+  conditional=TRUE
+)
+
+kableResults(HLA_results_recessive)
+
+#resultados modelo recessivo
+HLA_results_recessive <- HLA_results_recessive %>% clean_names() %>% select(allele,
+                                                                            covariates,
+                                                                            ntotal,
+                                                                            ntotal_percent,
+                                                                            n_disease_0,
+                                                                            n_disease_0_percent,
+                                                                            n_disease_1,
+                                                                            n_disease_1_percent,
+                                                                            estimate,
+                                                                            conf_low,
+                                                                            conf_high,
+                                                                            p_value,
+                                                                            p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_results_recessive <- HLA_results_recessive %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+
+HLA_results_recessive <- HLA_results_recessive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
+
+write.xlsx(HLA_results_recessive, file = "HLA_alleles_results_recessive_6D_bonferroni.xlsx")
+
+
+###Aminoácidos
+
+HLA_AA <- prepareMiDAS(
+  hla_calls = dados_brutos_hla,
+  colData = dados_fenotipo_covar,
+  experiment = "hla_aa"
+)
+
+write.xlsx(HLA_AA, file = "HLA_alleles_aminoacidos.xlsx")
+
+###identificar as posições de aminoácidos associados mais relevantes
+
+HLA_AA_model <- glm(disease ~ term, data = HLA_AA, family = binomial())
+HLA_AA_omnibus_results <- runMiDAS(
+  HLA_AA_model,
+  experiment = "hla_aa",
+  inheritance_model = "dominant",
+  conditional = FALSE,
+  omnibus = TRUE,
+  lower_frequency_cutoff = 0.02,
+  upper_frequency_cutoff = 0.98,
+  correction = "bonferroni"
+)
+
+kableResults(HLA_AA_omnibus_results)
+
+HLA_AA_omnibus_results <- HLA_AA_omnibus_results %>% filter(p.adjusted < 0.05) 
+
+write.xlsx(HLA_AA_omnibus_results, file = "HLA_alleles_aminoacidos_posições_bonferroni.xlsx")
+
+##investigar como as estimativas de efeito são distribuídas para uma determinada posição de aminoácido
+
+HLA_AA_DPB1_9_results <- runMiDAS(
+  HLA_AA_model,
+  experiment = "hla_aa",
+  inheritance_model = "dominant",
+  omnibus_groups_filter = "DPB1_9",
+  lower_frequency_cutoff = 0.02,
+  upper_frequency_cutoff = 0.98,
+  correction = "BH",
+  exponentiate = TRUE
+)
+
+kableResults(HLA_AA_DPB1_9_results, scroll_box_height = "250px")
+
+#####Manipular saída de resultados
+
+HLA_AA_DPB1_9_results <- HLA_AA_DPB1_9_results %>% clean_names() %>% select(aa,
+                                                                      ntotal,
+                                                                      ntotal_percent,
+                                                                      n_disease_0,
+                                                                      n_disease_0_percent,
+                                                                      n_disease_1,
+                                                                      n_disease_1_percent,
+                                                                      estimate,
+                                                                      conf_low,
+                                                                      conf_high,
+                                                                      p_value,
+                                                                      p_adjusted) %>% 
+  mutate_at(vars(estimate:p_adjusted), as.numeric)
+
+HLA_AA_DPB1_9_results <- HLA_AA_DPB1_9_results %>%
+  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
+  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
+
+
+HLA_AA_DPB1_9_results <- HLA_AA_DPB1_9_results %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
+  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
+
+write.xlsx(HLA_AA_DPB1_9_results, file = "HLA_AA_DPB1_9_results.xlsx")
+
+###Associação do aa com o alelo
+
+HLA_AA_DPB1_9_alleles <- getAllelesForAA(HLA_AA,"DPB1_9")
+
+write.xlsx(HLA_AA_DPB1_9_alleles, file = "HLA_AA_DPB1_9_alleles.xlsx")
