@@ -1,5 +1,4 @@
 #instalar pacotes####
-options("install.lock"=FALSE)
 install.packages("devtools", dependencies = TRUE)
 install.packages("openxlsx", dependencies = TRUE)
 install.packages("tidyverse", dependencies = TRUE)
@@ -29,7 +28,7 @@ library(labelled)
 #Analisar no BIGDAWG####
 
 
-dados_covariveis <- read.xlsx("DOENÇA CELÍACA E MICROBIOMA Atualiz. 15_05_24 Fernanda (1) (1).xlsx", sheet=1, startRow = 1)
+dados_covariveis <- read.xlsx("HLA_data.xlsx", sheet=1, startRow = 1)
 dados_covariveis <- dados_covariveis %>% rename(Codigo = "Código", sexo = "Sexo.(F.=.1,.M.=.0)")
 dados_covariveis <- dados_covariveis %>% select(Grupo, sexo, everything())
 dados_covariveis <- dados_covariveis
@@ -54,7 +53,7 @@ results_HWE_controls$p.value <- as.numeric(results_HWE_controls$p.value)
 locus_filter <- results_HWE_controls %>% filter(p.value <= 0.05)
 locus_filter <- locus_filter$Locus
 
-#associação dos alelos (3 dígitos) - apenas significativos#
+#associação dos alelos - apenas significativos#
 results_association_locus <- as.data.frame(BIGDAWG_results[["L"]][["Set1"]][["OR"]])
 results_association_locus$OR <- extract_number(results_association_locus$OR)
 
@@ -327,7 +326,7 @@ save_as_docx(merged_tables, path = "Multivariate regression HLA alleles - all mo
 
 
 
-#análises de haplótipos salvo no R####
+#análises de haplótipos####
 
 
 ####Haplótipo DQA1 e DQB1###
