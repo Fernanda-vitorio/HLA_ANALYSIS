@@ -8,9 +8,9 @@ library(readr)
 
 #arquivo de fenótipo exemplo do manual do desenvolvedor####
 
-dados_fenotipo_covar <- read.xlsx("DOENÇA CELÍACA E MICROBIOMA Atualiz. 15_05_24 Fernanda (1) (1).xlsx", sheet=1, startRow = 3)
+dados_fenotipo_covar <- read.xlsx("HLA_data.xlsx", sheet=1, startRow = 3)
 
-dados_fenotipo_covar <- dados_fenotipo_covar %>% clean_names() %>% filter(selecionados_para_estatistica == 1) %>% drop_na(a_1) %>% select(codigo, grupo, sexo_f_1_m_0) %>% dplyr::rename(ID = codigo)
+dados_fenotipo_covar <- dados_fenotipo_covar %>% clean_names() %>% drop_na(a_1) %>% select(codigo, grupo, sexo_f_1_m_0) %>% dplyr::rename(ID = codigo)
 dados_fenotipo_covar$ID <- gsub(" ", "_", dados_fenotipo_covar$ID)
 
 #converter grupos caso-controle para dados binários
@@ -19,8 +19,8 @@ dados_fenotipo_covar <- dados_fenotipo_covar %>% mutate(disease = case_when(grup
                                                                             grupo == "MG1" ~ 0))
 
 #dados brutos de genotipagem HLA
-dados_brutos_hla <- read.xlsx("DOENÇA CELÍACA E MICROBIOMA Atualiz. 15_05_24 Fernanda (1) (1).xlsx", sheet=1, startRow = 3)
-dados_brutos_hla <- dados_brutos_hla %>% filter(Selecionados.para.estatística == 1)%>% drop_na(A_1) %>% select(-c(Grupo, `Sexo.(F.=.1,.M.=.0)`, Selecionados.para.estatística, Motivo)) %>% dplyr::rename(ID = "Código")
+dados_brutos_hla <- read.xlsx("HLA_data.xlsx", sheet=1, startRow = 3)
+dados_brutos_hla <- dados_brutos_hla %>% drop_na(A_1) %>% select(-c(Grupo, `Sexo.(F.=.1,.M.=.0)`)) %>% dplyr::rename(ID = "Código")
 
 dados_brutos_hla$ID <- gsub(" ", "_", dados_brutos_hla$ID)
 
@@ -37,7 +37,7 @@ dados_brutos_hla$DPB1_2 <- gsub("DPB1*04:01:01:", "DPB1*04:01:01", dados_brutos_
 
 write_tsv(dados_brutos_hla, "dados_brutos_hla.tsv", na = "NA", quote = "none")
 
-#dados HLA genotipagem
+#MIDAS ANALYSIS
 
 dados_hla_midas <- readHlaCalls("dados_brutos_hla.tsv", resolution = 6, na.strings = c("Not typed", "-", "NA", "", " "))
 
@@ -302,137 +302,6 @@ HLA_results_recessive <- HLA_results_recessive %>% unite(CI_95_OR, c("conf_low",
   dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
 
 write.xlsx(HLA_results_recessive, file = "HLA_alleles_results_recessive_6D_cov.xlsx")
-
-
-
-
-
-
-###########################
-
-
-
-
-
-
-#########análise modelo dominante corrigido para covariaveis (bonferroni)
-HLA_results_dominant <- runMiDAS(
-  object = HLA_model, 
-  experiment = "hla_alleles", 
-  inheritance_model = "dominant",
-  lower_frequency_cutoff = 0.02, 
-  upper_frequency_cutoff = 0.98, 
-  correction = "bonferroni", 
-  exponentiate = TRUE,
-  conditional=TRUE
-)
-kableResults(HLA_results_dominant, scroll_box_height = "200px")
-
-#resultados modelo dominante
-HLA_results_dominant <- HLA_results_dominant %>% clean_names() %>% select(allele,
-                                                                          covariates,
-                                                                          ntotal,
-                                                                          ntotal_percent,
-                                                                          n_disease_0,
-                                                                          n_disease_0_percent,
-                                                                          n_disease_1,
-                                                                          n_disease_1_percent,
-                                                                          estimate,
-                                                                          conf_low,
-                                                                          conf_high,
-                                                                          p_value,
-                                                                          p_adjusted) %>% 
-  mutate_at(vars(estimate:p_adjusted), as.numeric)
-
-HLA_results_dominant <- HLA_results_dominant %>%
-  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
-  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
-
-HLA_results_dominant <- HLA_results_dominant %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
-  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05)
-
-write.xlsx(HLA_results_dominant, file = "HLA_alleles_results_dominant_6D_bonferroni.xlsx")
-
-#análise modelo aditivo corrigido para covariaveis (bonferroni)
-HLA_results_additive <- runMiDAS(
-  object = HLA_model, 
-  experiment = "hla_alleles", 
-  inheritance_model = "additive",
-  lower_frequency_cutoff = 0.02, 
-  upper_frequency_cutoff = 0.98, 
-  correction = "bonferroni", 
-  exponentiate = TRUE,
-  conditional=TRUE
-)
-
-kableResults(HLA_results_additive)
-
-#resultados modelo aditivo
-HLA_results_additive <- HLA_results_additive %>% clean_names() %>% select(allele,
-                                                                          covariates,
-                                                                          ntotal,
-                                                                          ntotal_percent,
-                                                                          n_disease_0,
-                                                                          n_disease_0_percent,
-                                                                          n_disease_1,
-                                                                          n_disease_1_percent,
-                                                                          estimate,
-                                                                          conf_low,
-                                                                          conf_high,
-                                                                          p_value,
-                                                                          p_adjusted) %>% 
-  mutate_at(vars(estimate:p_adjusted), as.numeric)
-
-HLA_results_additive <- HLA_results_additive %>%
-  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
-  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
-
-
-HLA_results_additive <- HLA_results_additive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
-  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
-
-write.xlsx(HLA_results_additive, file = "HLA_4alleles_results_additive_6D_bonferroni.xlsx")
-
-
-#análise modelo recessivo corrigido para covariaveis bonferroni
-HLA_results_recessive <- runMiDAS(
-  object = HLA_model, 
-  experiment = "hla_alleles", 
-  inheritance_model = "recessive",
-  lower_frequency_cutoff = 0.02, 
-  upper_frequency_cutoff = 0.98, 
-  correction = "bonferroni", 
-  exponentiate = TRUE,
-  conditional=TRUE
-)
-
-kableResults(HLA_results_recessive)
-
-#resultados modelo recessivo
-HLA_results_recessive <- HLA_results_recessive %>% clean_names() %>% select(allele,
-                                                                            covariates,
-                                                                            ntotal,
-                                                                            ntotal_percent,
-                                                                            n_disease_0,
-                                                                            n_disease_0_percent,
-                                                                            n_disease_1,
-                                                                            n_disease_1_percent,
-                                                                            estimate,
-                                                                            conf_low,
-                                                                            conf_high,
-                                                                            p_value,
-                                                                            p_adjusted) %>% 
-  mutate_at(vars(estimate:p_adjusted), as.numeric)
-
-HLA_results_recessive <- HLA_results_recessive %>%
-  mutate_at(vars(estimate:conf_high), ~round(., 2)) %>% 
-  mutate_at(vars(p_value:p_adjusted), ~signif(., 2))
-
-
-HLA_results_recessive <- HLA_results_recessive %>% unite(CI_95_OR, c("conf_low", "conf_high"), sep = " - ") %>% 
-  dplyr::rename(OR = estimate) %>% filter(p_adjusted < 0.05) 
-
-write.xlsx(HLA_results_recessive, file = "HLA_alleles_results_recessive_6D_bonferroni.xlsx")
 
 
 ###Aminoácidos
