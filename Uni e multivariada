@@ -1,0 +1,154 @@
+#instalar pacotes####
+install.packages("openxlsx", dependencies = TRUE)
+install.packages("tidyverse", dependencies = TRUE)
+install.packages("gtsummary", dependencies = TRUE)
+install.packages("labelled", dependencies = TRUE)
+install.packages("flextable", dependencies = TRUE)
+install.packages("janitor", dependencies = TRUE)
+install.packages("metan", dependencies = TRUE)
+install.packages("stringr", dependencies = TRUE)
+install.packages("rstatix", dependencies = TRUE)
+
+#Carregar pacotes necessários####
+library(openxlsx)
+library(tidyverse)
+library(gtsummary)
+library(labelled)
+library(flextable)
+library(janitor)
+library(metan)
+library(stringr)
+library(rstatix)
+
+#ler dados####
+dados_seq <- read.xlsx("Planilha HLA.xlsx", sheet = 1, colNames = T)
+
+dados_seq <- dados_seq %>% clean_names()
+
+##teste Univariada sem correção#
+
+Univariada_DC_vs_controles <- dados_seq %>%  
+  select(grupo, age:hap_04_04) %>% 
+  tbl_uvregression(
+    method = glm,
+    y = grupo,
+    method.args = list(family = binomial),
+    exponentiate = TRUE,
+    hide_n = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)
+  ) %>%
+  bold_p(t = 0.05) %>%   # apenas destaca p < 0.05, sem q-value
+  sort_p() %>%           # ordena por p-value
+  modify_header(update = list(
+    label ~ "Variável",
+    p.value ~ "p",
+    estimate ~ "OR",
+    ci ~ "IC 95%"
+  )) %>%
+  modify_footnote(update = list(
+    estimate ~ "Odds Ratio",
+    ci ~ "Intervalo de confiança de 95%"
+  ), abbreviation = TRUE) %>%
+  modify_caption(caption = "Tabela - Regressões univariadas IPLEX") %>%
+  as_flex_table()
+
+save_as_docx(Univariada_DC_vs_controles, path = "Regressões univariadas sem correção.docx")
+
+###Univariada com correção##
+
+Univariada_DC_vs_controles <- dados_seq %>%  
+  select(grupo, age:hap_04_04) %>% 
+  tbl_uvregression(
+    method = glm,
+    y = grupo,
+    method.args = list(family = binomial),
+    exponentiate = TRUE,
+    hide_n = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)) %>%
+  add_q(method = "fdr") %>% 
+  bold_p(t = 0.05, q = TRUE) %>%
+  sort_p(q = TRUE) %>% 
+  modify_header(update = list(label ~ "Variável", p.value ~ "p", estimate ~ "OR", ci ~ "IC 95%", q.value = "pcorr")) %>%
+  modify_footnote(update = list(estimate ~ "Odds Ratio", ci ~ "Intervalo de confiança de 95%"), abbreviation = TRUE) %>%
+  modify_caption(caption = "Tabela - Regressões univariadas IPLEX") %>%
+  as_flex_table()
+
+save_as_docx(Univariada_DC_vs_controles, path = "Regressões univariadas corrigidos.docx")
+
+
+#regressão multivariada####
+
+#modelo completo#
+
+regressao_multivariada_modelo_completo <- glm(grupo ~ rs6691768d + rs1257424a + hap_04_04 + hap_05_02 + hap_02_02, family=binomial(link="logit"), data = dados_seq) %>%
+  tbl_regression(intercept = FALSE, exponentiate = TRUE) %>%
+  add_q(method = "fdr") %>% 
+  sort_p(q=TRUE) %>% 
+  bold_p(t = 0.05, q = TRUE) %>% 
+  modify_header(update = list(label ~ "Variável", p.value ~ "p", q.value ~ "pcorr", estimate ~ "OR", ci ~ "IC 95%")) %>%
+  modify_footnote(update = list(estimate ~ "Odds Ratio", ci ~ "Intervalo de Confiança de 95%"), abbreviation = TRUE)
+regressao_multivariada_modelo_completo
+
+
+
+#modelo reduzido
+
+modelo_reduzido <- glm(grupo ~ rs6691768d + rs1257424a + hap_04_04 + hap_05_02 + hap_02_02, family = binomial, data = dados_seq) %>% 
+  tbl_regression(exponentiate = TRUE,
+                 pvalue_fun = function(x) {
+                   if_else(
+                     is.na(x), 
+                     NA_character_,
+                     if_else(x < 0.001, format(x, digits = 2, scientific = TRUE), format(round(x, 3), scientific = F))
+                   )
+                 }) %>% 
+  add_q(method = "fdr") %>% 
+  bold_p(q = TRUE, t = 0.05) %>% 
+  sort_p(q = TRUE) %>% 
+  modify_header(label ~ "Variáveis", p.value ~ "p", estimate ~ "OR", conf.low ~ "IC 95%", q.value = "pcorr") %>% 
+  as_flex_table()
+
+save_as_docx(modelo_reduzido, path = "Regressões multivariadas HLA vs IPLEX.docx")
+
+#Summary
+
+table_summary <- dados_seq %>%
+  select(grupo, rs6691768d, rs1257424a, hap_04_04, hap_05_02, hap_02_02) %>%
+  tbl_summary(
+    by = grupo,
+    type = list(
+      all_dichotomous() ~ "dichotomous"
+    ),
+    statistic = list(
+      all_continuous() ~ "{median} ({p25} - {p75})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    ),
+    digits = list(
+      all_categorical() ~ c(0, 0, 2),
+      all_continuous() ~ c(2, 2, 2)
+    ),
+    missing = "no",
+    value = list(
+      rs6691768d ~ "1",
+      rs1257424a ~ "1",
+      hap_04_04 ~ "1",
+hap_05_02 ~ "1",
+hap_02_02 ~ "1"
+    )
+  ) %>%
+  modify_header(
+    list(
+      label ~ "Variável",
+      stat_1 ~ "Controle, n = {n}",
+      stat_2 ~ "Paciente, n = {n}"
+    )
+  ) %>%
+  modify_spanning_header(
+    c("stat_1", "stat_2") ~ "dados_seq"
+  )
+
+table_merge <- tbl_merge(list(table_summary), tab_spanner = c( "Estatísticas descritivas")) %>%
+  as_flex_table()
+table_merge
+
+save_as_docx(table_merge, path = "estatística descritiva.docx")
