@@ -35,7 +35,6 @@ Univariada_DC_vs_controles <- dados_seq %>%
     method.args = list(family = binomial),
     exponentiate = TRUE,
     hide_n = TRUE,
-   formula = "{y} ~ {x} + sexo + a1 + a2 + a3",
     pvalue_fun = ~style_pvalue(.x, digits = 2)
   ) %>%
   bold_p(t = 0.05) %>%   # apenas destaca p < 0.05, sem q-value
@@ -65,6 +64,7 @@ Univariada_DC_vs_controles <- dados_seq %>%
     method.args = list(family = binomial),
     exponentiate = TRUE,
     hide_n = TRUE,
+formula = "{y} ~ {x} + sexo + a1 + a2 + a3",
     pvalue_fun = ~style_pvalue(.x, digits = 2)) %>%
   add_q(method = "fdr") %>% 
   bold_p(t = 0.05, q = TRUE) %>%
